@@ -284,7 +284,7 @@ const generateAuthFilter = (roles: Array<RoleDefinition>, fields: ReadonlyArray<
       if (hasMultiClaims) {
         authCollectionExp.push(
           ...[
-            generateOwnerClaimExpression(role.claim!, `ownerClaim${idx}`),
+            generateOwnerClaimExpression(role.claim!, `role${idx}`),
             iff(
               notEquals(ref(`role${idx}`), str(NONE_VALUE)),
               qref(methodCall(ref('authFilter.add'), raw(`{"${role.entity}": { "${ownerCondition}": $ownerClaim${idx} }}`))),
