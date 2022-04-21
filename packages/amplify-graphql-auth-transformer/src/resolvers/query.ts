@@ -178,9 +178,10 @@ const generateAuthOnModelQueryExpression = (
         ),
       );
     } else {
-      primaryRoles.forEach(role => {
+      primaryRoles.forEach((role, idx) => {
         modelQueryExpression.push(
           generateOwnerClaimExpression(role.claim!, `${role.entity}Claim`),
+          generateOwnerClaimListExpression(role.claim!, idx),
           ifElse(
             not(ref(`util.isNull($ctx.args.${role.entity})`)),
             compoundExpression([
@@ -207,7 +208,12 @@ const generateAuthOnModelQueryExpression = (
                 ]),
               ),
             ]),
-            qref(methodCall(ref('primaryFieldMap.put'), str(role.entity), ref(`${role.entity}Claim`))),
+            compoundExpression([
+              qref(methodCall(ref('primaryFieldMap.put'), str(role.entity), ref(`${role.entity}Claim`))),
+              forEach(ref('ownerClaim'), ref(`ownerClaimsList${idx}`), [
+                qref(methodCall(ref('primaryFieldMap.put'), str(role.entity), ref('ownerClaim'))),
+              ]),
+            ]),
           ),
         );
       });
@@ -287,7 +293,7 @@ const generateAuthFilter = (roles: Array<RoleDefinition>, fields: ReadonlyArray<
             generateOwnerClaimExpression(role.claim!, `role${idx}`),
             iff(
               notEquals(ref(`role${idx}`), str(NONE_VALUE)),
-              qref(methodCall(ref('authFilter.add'), raw(`{"${role.entity}": { "${ownerCondition}": $ownerClaim${idx} }}`))),
+              qref(methodCall(ref('authFilter.add'), raw(`{"${role.entity}": { "${ownerCondition}": $role${idx} }}`))),
             ),
           ],
         );
