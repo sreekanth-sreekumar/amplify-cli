@@ -31,6 +31,7 @@ import {
   API_KEY_AUTH_TYPE,
   LAMBDA_AUTH_TYPE,
   IAM_AUTH_TYPE,
+  COGNITO_CUSTOM_CLAIM_PREFIX,
 } from '../utils';
 
 // note in the resolver that operation is protected by auth
@@ -92,7 +93,9 @@ export const getOwnerClaim = (ownerClaim: string): Expression => {
 export const generateOwnerClaimExpression = (ownerClaim: string, refName: string): CompoundExpressionNode => {
   const expressions: Expression[] = [];
   const identityClaims = ownerClaim.split(':');
-  const hasMultiIdentityClaims = identityClaims.length > 1 && ownerClaim !== DEFAULT_COGNITO_IDENTITY_CLAIM;
+  const hasMultiIdentityClaims = identityClaims.length > 1
+    && ownerClaim !== DEFAULT_COGNITO_IDENTITY_CLAIM
+    && identityClaims[0] !== COGNITO_CUSTOM_CLAIM_PREFIX;
 
   if (hasMultiIdentityClaims) {
     identityClaims.forEach((claim, idx) => {
@@ -233,6 +236,14 @@ export const generateAuthRequestExpression = (): string => {
  */
 export const generateOwnerClaimListExpression = (claim: string, idx: number): Expression => {
   const claims = claim.split(':');
+
+  if (
+    claims.length <= 1
+      || claim === DEFAULT_COGNITO_IDENTITY_CLAIM
+      || claims[0] === COGNITO_CUSTOM_CLAIM_PREFIX
+  ) {
+    return set(ref(`ownerClaimsList${idx}`), list([]));
+  }
 
   return compoundExpression([
     set(ref(`ownerClaimsList${idx}`), list([])),

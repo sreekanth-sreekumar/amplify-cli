@@ -100,6 +100,7 @@ import {
   getReadRolesForField,
   getAuthDirectiveRules,
   DEFAULT_COGNITO_IDENTITY_CLAIM,
+  COGNITO_CUSTOM_CLAIM_PREFIX,
 } from './utils';
 import { showDefaultIdentityClaimWarning } from './utils/warnings';
 
@@ -398,7 +399,9 @@ export class AuthTransformer extends TransformerAuthBase implements TransformerA
       });
 
       roleDefinitions.forEach(role => {
-        const hasMultiClaims = role.claim?.split(':')?.length > 1 && role.claim !== DEFAULT_COGNITO_IDENTITY_CLAIM;
+        const hasMultiClaims = role.claim?.split(':')?.length > 1
+          && role.claim !== DEFAULT_COGNITO_IDENTITY_CLAIM
+          && role.claim !== COGNITO_CUSTOM_CLAIM_PREFIX;
         const createOwnerFieldResolver = role.strategy === 'owner' && hasMultiClaims;
 
         if (createOwnerFieldResolver) {

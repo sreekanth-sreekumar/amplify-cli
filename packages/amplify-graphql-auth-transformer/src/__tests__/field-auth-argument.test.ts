@@ -536,7 +536,6 @@ describe('with identity claim feature flag disabled', () => {
     #set( $ownerEntity0 = $util.defaultIfNull($ctx.source.owner, null) )
     #set( $ownerClaim0 = $util.defaultIfNull($ctx.identity.claims.get("username"), $util.defaultIfNull($ctx.identity.claims.get("cognito:username"), "___xamznone____")) )
     #set( $ownerClaimsList0 = [] )
-    $util.qr($ownerClaimsList0.add($util.defaultIfNull($ctx.identity.claims.get("username"), $util.defaultIfNull($ctx.identity.claims.get("cognito:username"), "___xamznone____"))))
     #if( $ownerEntity0 == $ownerClaim0 || $ownerClaimsList0.contains($ownerEntity0) )
       #set( $isAuthorized = true )
     #end
@@ -631,7 +630,6 @@ describe('with identity claim feature flag disabled', () => {
     #set( $ownerEntity0 = $util.defaultIfNull($ctx.source.owner, null) )
     #set( $ownerClaim0 = $util.defaultIfNull($ctx.identity.claims.get("username"), $util.defaultIfNull($ctx.identity.claims.get("cognito:username"), "___xamznone____")) )
     #set( $ownerClaimsList0 = [] )
-    $util.qr($ownerClaimsList0.add($util.defaultIfNull($ctx.identity.claims.get("username"), $util.defaultIfNull($ctx.identity.claims.get("cognito:username"), "___xamznone____"))))
     #if( $ownerEntity0 == $ownerClaim0 || $ownerClaimsList0.contains($ownerEntity0) )
       #set( $isAuthorized = true )
     #end
