@@ -173,7 +173,7 @@ const generateAuthFilter = (
     const roleKey = entityIsList ? role.entity : `${role.entity}.keyword`;
     if (role.strategy === 'owner') {
       const claims = role.claim!.split(':');
-      const hasMultiClaims = claims.length > 1 && role.claim! !== 'cognito:username';
+      const hasMultiClaims = claims.length > 1 && role.claim! !== 'cognito:username' && claims[0] !== 'custom';
 
       if (hasMultiClaims) {
         filterExpression.push(
