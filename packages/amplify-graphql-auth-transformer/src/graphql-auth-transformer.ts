@@ -64,6 +64,7 @@ import {
   AUTH_PROVIDER_DIRECTIVE_MAP,
   DEFAULT_GROUP_CLAIM,
   DEFAULT_IDENTITY_CLAIM,
+  DEFAULT_UNIQUE_IDENTITY_CLAIM,
   DEFAULT_GROUPS_FIELD,
   DEFAULT_OWNER_FIELD,
   MODEL_OPERATIONS,
@@ -97,6 +98,7 @@ import {
   getRelationalPrimaryMap,
   getReadRolesForField,
   getAuthDirectiveRules,
+  IDENTITY_CLAIM_DELIMITER,
 } from './utils';
 
 // @ auth
@@ -116,6 +118,7 @@ import {
 export class AuthTransformer extends TransformerAuthBase implements TransformerAuthProvider {
   private config: AuthTransformerConfig;
   private configuredAuthProviders: ConfiguredAuthProviders;
+  private rules: AuthRule[];
   // access control
   private roleMap: Map<string, RoleDefinition>;
   private authModelConfig: Map<string, AccessControlMatrix>;
@@ -143,6 +146,7 @@ export class AuthTransformer extends TransformerAuthBase implements TransformerA
     this.generateIAMPolicyForUnauthRole = false;
     this.generateIAMPolicyForAuthRole = false;
     this.authNonModelConfig = new Map();
+    this.rules = [];
   }
 
   before = (context: TransformerBeforeStepContextProvider): void => {
@@ -162,10 +166,10 @@ export class AuthTransformer extends TransformerAuthBase implements TransformerA
     if (context.metadata.has('joinTypeList')) {
       isJoinType = context.metadata.get<Array<string>>('joinTypeList')!.includes(typeName);
     }
-    const rules: AuthRule[] = getAuthDirectiveRules(new DirectiveWrapper(directive));
+    this.rules = getAuthDirectiveRules(new DirectiveWrapper(directive));
 
     // validate rules
-    validateRules(rules, this.configuredAuthProviders, def.name.value);
+    validateRules(this.rules, this.configuredAuthProviders, def.name.value);
     // create access control for object
     const acm = new AccessControlMatrix({
       name: def.name.value,
@@ -173,12 +177,12 @@ export class AuthTransformer extends TransformerAuthBase implements TransformerA
       resources: collectFieldNames(def),
     });
     // Check the rules to see if we should generate Auth/Unauth Policies
-    this.setAuthPolicyFlag(rules);
-    this.setUnauthPolicyFlag(rules);
+    this.setAuthPolicyFlag(this.rules);
+    this.setUnauthPolicyFlag(this.rules);
     // add object into policy
-    this.addTypeToResourceReferences(def.name.value, rules);
+    this.addTypeToResourceReferences(def.name.value, this.rules);
     // turn rules into roles and add into acm and roleMap
-    this.convertRulesToRoles(acm, rules, isJoinType);
+    this.convertRulesToRoles(acm, this.rules, isJoinType, undefined, undefined, context);
     this.modelDirectiveConfig.set(typeName, getModelConfig(modelDirective, typeName, context.isProjectUsingDataStore()));
     this.authModelConfig.set(typeName, acm);
   };
@@ -236,7 +240,7 @@ export class AuthTransformer extends TransformerAuthBase implements TransformerA
         acm = this.authModelConfig.get(typeName) as AccessControlMatrix;
         acm.resetAccessForResource(fieldName);
       }
-      this.convertRulesToRoles(acm, rules, false, fieldName);
+      this.convertRulesToRoles(acm, rules, false, fieldName, undefined, context);
       this.authModelConfig.set(typeName, acm);
     } else {
       // if @auth is used without @model only generate static group rules in the resolver
@@ -387,6 +391,23 @@ export class AuthTransformer extends TransformerAuthBase implements TransformerA
       subscriptionFieldNames.forEach(subscription => {
         this.protectSubscriptionResolver(context, subscription.typeName, subscription.fieldName, subscriptionRoles);
       });
+
+      roleDefinitions.forEach(role => {
+        if (role.strategy === 'owner') {
+          this.addFieldResolverForDynamicAuth(context, def, modelName, role.entity);
+        }
+      });
+
+      if (context.featureFlags.getBoolean('useSubUsernameForDefaultIdentityClaim')) {
+        roleDefinitions.forEach(role => {
+          const hasMultiClaims = role.claim?.split(IDENTITY_CLAIM_DELIMITER)?.length > 1;
+          const createOwnerFieldResolver = role.strategy === 'owner' && hasMultiClaims;
+
+          if (createOwnerFieldResolver) {
+            this.addFieldResolverForDynamicAuth(context, def, modelName, role.entity);
+          }
+        });
+      }
     });
 
     this.authNonModelConfig.forEach((acm, typeFieldName) => {
@@ -816,6 +837,7 @@ export class AuthTransformer extends TransformerAuthBase implements TransformerA
     allowRoleOverwrite: boolean,
     field?: string,
     overrideOperations?: ModelOperation[],
+    context?: TransformerSchemaVisitStepContextProvider,
   ): void {
     authRules.forEach(rule => {
       const operations: ModelOperation[] = overrideOperations || rule.operations || MODEL_OPERATIONS;
