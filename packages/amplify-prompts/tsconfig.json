@@ -3,6 +3,7 @@
   "compilerOptions": {
     "outDir": "./lib",
     "rootDir": "./src",
-    "strict": true
+    "strict": true,
+    // "strictNullChecks": false
   }
 }

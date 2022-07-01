@@ -17,6 +17,9 @@ const { fileLogger } = require('../utils/aws-logger');
 const logger = fileLogger('aws-cfn');
 const { pagedAWSCall } = require('./paged-call');
 
+const cliProgress = require('cli-progress');
+const { MultiProgressBar } = require('amplify-prompts');
+
 const CFN_MAX_CONCURRENT_REQUEST = 5;
 const CFN_POLL_TIME = 5 * 1000; // 5 secs wait to check if  new stacks are created by root stack
 let CFNLOG = [];
@@ -24,7 +27,7 @@ const CFN_SUCCESS_STATUS = ['UPDATE_COMPLETE', 'CREATE_COMPLETE', 'DELETE_COMPLE
 
 const CNF_ERROR_STATUS = ['CREATE_FAILED', 'DELETE_FAILED', 'UPDATE_FAILED'];
 class CloudFormation {
-  constructor(context, userAgentAction, options = {}) {
+  constructor(context, userAgentAction, options = {}, eventMap = {}) {
     return (async () => {
       let userAgentParam;
       if (userAgentAction) {
@@ -47,9 +50,214 @@ class CloudFormation {
 
       this.cfn = new aws.CloudFormation({ ...cred, ...options, ...userAgentOption });
       this.context = context;
+      if (Object.keys(eventMap).length !== 0) {
+        this.eventMap = eventMap;
+        // this.stackTrace = {
+        //   'rootStack': []
+        // }
+        // this.eventMap['categories'].forEach(category => this.stackTrace[category.name] = [])
+        this.progressBar = this.initializeProgressBars();
+      }
       return this;
     })();
   }
+
+  // createFormat(options, params, payload) {
+
+  //   // if (!payload.hasOwnProperty('logicalResourceId')) {
+  //     const completeSize = Math.round(params.progress*options.barsize);
+  //     const incompleteSize = options.barsize-completeSize;
+
+  //     // generate bar string by stripping the pre-rendered strings
+  //     const bar = options.barCompleteString.substr(0, completeSize) +
+  //           options.barGlue +
+  //           options.barIncompleteString.substr(0, incompleteSize);
+
+  //     return `Deploying ${payload.progressName} on env: ${payload.envName} || ${bar}`
+  //   // }
+
+  //   // else {
+  //   //   var e = [{
+  //   //     logicalResourceId: payload.logicalResourceId,
+  //   //     resourceType: payload.resourceType,
+  //   //     resourceStatus: payload.resourceStatus,
+  //   //     timeStamp: payload.timeStamp
+  //   //   }]
+  
+  //   //   const output = columnify(e, {
+  //   //     showHeaders: false,
+  //   //     truncate: true,
+  //   //     maxWidth: 30,
+  //   //     minWidth: 30
+  //   //   })
+  
+  //   //   return output;
+  //   // }
+    
+  // }
+
+  // createFormat(options, params, payload) {
+  //   const completeSize = Math.round(params.progress*options.barsize);
+  //     const incompleteSize = options.barsize-completeSize;
+
+  //     // generate bar string by stripping the pre-rendered strings
+  //     const bar = options.barCompleteString.substr(0, completeSize) +
+  //           options.barGlue +
+  //           options.barIncompleteString.substr(0, incompleteSize);
+
+  //     return `Deploying ${payload.progressName} on env: ${payload.envName} || ${bar}`
+  // }
+
+  createItemFormatter(payload) {
+    var e = [{
+      logicalResourceId: payload.LogicalResourceId,
+      resourceType: payload.ResourceType,
+      resourceStatus: payload.ResourceStatus,
+      timeStamp: (new Date(payload.Timestamp)).toLocaleString()
+    }]
+
+    let output = columnify(e, {
+      showHeaders: false,
+      truncate: true,
+      maxWidth: 30,
+      minWidth: 30
+    })
+
+    if(["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(payload.ResourceStatus)) {
+      output = chalk.green(output);
+    }
+    if (payload.ResourceStatus.includes('FAILED')) {
+      output = chalk.red(output);
+    }
+    return output;
+  }
+
+  createProgressBarFormatter(params, payload, options) {
+    const completeSize = Math.round((params.value/params.total)*40);
+    const incompleteSize = options.barSize-completeSize;
+
+    // generate bar string by stripping the pre-rendered strings
+    const bar = options.barCompleteString.substr(0, completeSize) +
+            options.barIncompleteString.substr(0, incompleteSize);
+    
+    const progressNameParts = payload.progressName.split("-");
+    const name = progressNameParts.length === 1 ? progressNameParts[0] : `${progressNameParts[0]} ${progressNameParts[1]}`;
+    return `Deploying ${name} on env: ${payload.envName} || ${bar} || ${params.value}/${params.total}`;
+  }
+
+  initializeProgressBars() {
+    const newMultiBar = new MultiProgressBar({
+      progressBarFormatter: this.createProgressBarFormatter,
+      itemFormatter: this.createItemFormatter,
+      loneWolf: false,
+      hideCursor: true,
+      lineWrap: false,
+      barCompleteChar: '=',
+      barIncompleteChar: '-',
+      barSize: 40,
+      itemCompleteStatus: ["CREATE_COMPLETE", "UPDATE_COMPLETE"],
+      itemFailedSubString: 'FAILED'
+    });
+    let progressBarsConfigs = [];
+    progressBarsConfigs.push({
+      name: 'projectBar',
+      value: 0,
+      total: 1+this.eventMap['rootResources'].length,
+      payload: {
+        progressName: this.context.exeInfo.projectConfig.projectName,
+        envName: this.context.exeInfo.localEnvInfo.envName
+      }
+    });
+
+    progressBarsConfigs = this.eventMap['categories'].reduce((prev, curr) => {
+      return prev.concat({
+        name: curr.name,
+        value: 0,
+        total: curr.size,
+        payload: {
+          progressName: curr.name,
+          envName: this.context.exeInfo.localEnvInfo.envName
+        }
+      })
+    }, progressBarsConfigs);
+
+    newMultiBar.create(progressBarsConfigs)
+    return newMultiBar
+  }
+
+  // initializeProgressBars() {
+  //   const rootProgressBar =  new cliProgress.MultiBar({
+  //     format: `Deploying {progressName} on env: {envName} || {bar} || {value}/{total}`,
+  //     clearOnComplete: true,
+  //     hideCursor: true,
+  //     stopOnComplete: true,
+  //   }, cliProgress.Presets.shades_grey);
+
+  //   let rootProjectBar = rootProgressBar.create(1+this.eventMap['rootResources'].length, 0, {
+  //     progressName: this.context.exeInfo.projectConfig.projectName,
+  //     envName: this.context.exeInfo.localEnvInfo.envName,
+  //   });
+
+  //   this.stackTrace['rootStack'].push({id: 'rootProjectBar', bar: rootProjectBar});
+
+  //   const categoryBars = this.eventMap['categories'].map(category => {
+
+  //     const categoryBar =  new cliProgress.MultiBar({
+  //       format: `\nDeploying Resources of category: {category} || {bar} || {value}/{total}`,
+  //       clearOnComplete: true,
+  //       hideCursor: true,
+  //       stopOnComplete: true,
+  //     }, cliProgress.Presets.shades_grey);
+
+  //     let categoryProgressBar = categoryBar.create(category.size, 0, {
+  //       category: category.name
+  //     });
+
+  //     this.stackTrace[category.name].push({id: 'categoryProgressBar', bar: categoryProgressBar});
+
+  //     return {
+  //       name: category.name,
+  //       statusBar: categoryBar
+  //     }
+  //   });
+  //   return {
+  //     'rootStatusBar': rootProgressBar,
+  //     'categoryBars': categoryBars
+  //   }
+  // }
+
+  // initializeProgressBars() {
+
+  //   let progressBars = {
+  //     'rootProgressBar': new cliProgress.MultiBar({
+  //         format: 'Deploying Project: {projectName} on Env: {envName}: [{bar}] || {value}/{total}',
+  //         clearOnComplete: false,
+  //         hideCursor: true,
+  //       }, cliProgress.Presets.shades_grey),
+  //     'rootEventStatus': new cliProgress.MultiBar({
+  //         format: '{resourceStatus} || {resourceType} || {logicalId}',
+  //         clearOnComplete: false,
+  //         hideCursor: true,
+  //       }),
+
+  //     'categoryBars': this.eventMap['categories'].map(category => ({
+  //         name: category.name,
+  //         progressBar: new cliProgress.MultiBar({
+  //             format: 'Deploying {category} Category: [{bar}] || {value}/{total}',
+  //             clearOnComplete: false,
+  //             stopOnComplete: true,
+  //             hideCursor: true,
+  //           }, cliProgress.Presets.shades_grey),
+  //         eventStatus: new cliProgress.MultiBar({
+  //             format: '{resourceStatus} || {resourceType} || {logicalId}',
+  //             clearOnComplete: false,
+  //             hideCursor: true,
+  //           })
+  //       }))
+  //   }
+  //   return progressBars
+  // }
+
 
   createResourceStack(cfnParentStackParams) {
     const cfnModel = this.cfn;
@@ -124,15 +332,16 @@ class CloudFormation {
     this.context.exeInfo.cloudformationEvents = CFNLOG;
     const stackTrees = eventsWithFailure
       .filter(stack => stack.ResourceType !== 'AWS::CloudFormation::Stack')
+      .filter(stack => this.eventMap['eventToCategories'].has(stack.LogicalResourceId))
       .map(event => {
         const err = [];
-        const resourceName = event.PhysicalResourceId.replace(envRegExp, '') || event.LogicalResourceId;
+        const resourceName = event.LogicalResourceId;
         const cfnURL = getCFNConsoleLink(event, this.cfn);
-        err.push(`${chalk.bold('Resource Name:')} ${resourceName} (${event.ResourceType})`);
-        err.push(`${chalk.bold('Event Type:')} ${getStatusToErrorMsg(event.ResourceStatus)}`);
-        err.push(`${chalk.bold('Reason:')} ${event.ResourceStatusReason}`);
+        err.push(`${chalk.red.bold('Resource Name:')} ${resourceName} (${event.ResourceType})`);
+        err.push(`${chalk.red.bold('Event Type:')} ${getStatusToErrorMsg(event.ResourceStatus)}`);
+        err.push(`${chalk.red.bold('Reason:')} ${event.ResourceStatusReason}`);
         if (cfnURL) {
-          err.push(`${chalk.bold('URL:')} ${cfnURL}`);
+          err.push(`${chalk.red.bold('URL:')} ${cfnURL}`);
         }
         return err.join('\n');
       });
@@ -187,9 +396,238 @@ class CloudFormation {
     } else {
       newEvents = events;
     }
-    showEvents(_.uniqBy(newEvents, 'EventId'));
+    if(this.eventMap) {
+      this.showEventProgress(_.uniqBy(newEvents, 'EventId'));
+    }
+    else {
+      showEvents(_.uniqBy(newEvents, 'EventId'));
+    }
+    
     this.stackEvents = [...allShownEvents, ...newEvents];
   }
+
+  showEventProgress(events) {
+    events = events.reverse();
+    if (events.length > 0) {
+      events.forEach(event => {
+        const finishStatus = ["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(event.ResourceStatus);
+        let updateObj = {
+          name: event.LogicalResourceId,
+          payload: {
+            LogicalResourceId: event.LogicalResourceId,
+            ResourceType: event.ResourceType,
+            ResourceStatus: event.ResourceStatus,
+            Timestamp: event.Timestamp
+        }}
+        let item = this.eventMap['rootResources'].find(item => item.key === event.LogicalResourceId)
+        if(event.LogicalResourceId === this.eventMap['rootStackName'] || item) {
+          if (finishStatus && item) {
+            this.progressBar.finishBar(item.category)
+          }
+          this.progressBar.updateBar('projectBar', updateObj);
+        }
+        else {
+          const category = this.eventMap['eventToCategories'].get(event.LogicalResourceId);
+          if (category) {
+            this.progressBar.updateBar(category, updateObj);
+          }
+        }
+      })
+    }
+  }
+
+  // showEventProgress(events) {
+  //   events = events.reverse();
+  //   if(events.length > 0) {
+  //     events.forEach(event => {
+  //       // var e = [{
+  //       //   logicalResourceId: event.LogicalResourceId,
+  //       //   resourceType: event.ResourceType,
+  //       //   resourceStatus: event.ResourceStatus,
+  //       //   timeStamp: event.Timestamp
+  //       // }]
+    
+  //       // const output = columnify(e, {
+  //       //   showHeaders: false,
+  //       //   truncate: true,
+  //       //   maxWidth: 30,
+  //       //   minWidth: 30
+  //       // })
+  //       if(event.LogicalResourceId === this.eventMap['rootStackName'] ||
+  //         this.eventMap['rootResources'].includes(event.LogicalResourceId)) {
+  //           this.progressBars['rootStatusBar'].log(output + '\n');
+  //           let rootProgressBar = this.stackTrace['rootStack'].find(item => item.id === 'rootProjectBar');
+  //           if(["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(event.ResourceStatus)) {
+  //             rootProgressBar.bar.increment();
+  //           }
+  //       }
+  //       else {
+  //         const category = this.eventMap['eventToCategories'].get(event.LogicalResourceId)
+  //         if (category) {
+  //           let categoryBar = this.progressBars['categoryBars'].find(obj => obj.name === category);
+  //           categoryBar.statusBar.log(output+ '\n');
+  //           if(["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(event.ResourceStatus)) {
+  //             let categoryProgressBar = this.stackTrace[category].find(item => item.id === 'categoryProgressBar');
+  //             categoryProgressBar.bar.increment();
+  //           }
+
+  //         }
+  //       }
+  //           // let savedEvent = this.stackTrace['rootStack'].find(item => item.id === event.LogicalResourceId);
+  //           // if (savedEvent) {
+  //           //   savedEvent.bar.update(1, {
+  //           //     resourceStatus: event.ResourceStatus,
+  //           //     timeStamp: event.Timestamp
+  //           //   });
+  //           //   let rootProgressBar = this.stackTrace['rootStack'].find(item => item.id === 'rootProjectBar');
+  //           //   if(["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(event.ResourceStatus)) {
+  //           //     rootProgressBar.bar.update(1);
+  //           //     savedEvent.bar.stop();
+  //           //   }
+  //           // }
+  //           // else {
+  //           //   let statusBar = this.progressBars['rootStatusBar'].create(10, 0, {
+  //           //     resourceStatus: event.ResourceStatus,
+  //           //     resourceType: event.ResourceType,
+  //           //     logicalResourceId: event.LogicalResourceId,
+  //           //     timeStamp: event.Timestamp
+  //           //   })
+  //           //   const rootStackTrace = this.stackTrace['rootStack'].concat([
+  //           //     {id: event.LogicalResourceId, bar: statusBar}])
+  //           //   this.stackTrace['rootStack'] = rootStackTrace;
+  //           // }
+
+  //       // else {
+  //       //   const category = this.eventMap['eventToCategories'].get(event.LogicalResourceId)
+  //       //   if(category) {
+  //       //     let savedEvent = this.stackTrace[category].find(item => item.id === event.LogicalResourceId);
+  //       //     if (savedEvent) {
+  //       //       savedEvent.bar.update(1, {
+  //       //         resourceStatus: event.ResourceStatus,
+  //       //         timeStamp: event.Timestamp
+  //       //       });
+  //       //       let categoryProgressBar = this.stackTrace[category].find(item => item.id === 'categoryProgressBar');
+  //       //       if(["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(event.ResourceStatus)) {
+  //       //         categoryProgressBar.bar.update(1);
+  //       //         savedEvent.bar.stop();
+  //       //       }
+  //       //     }
+  //       //     else {
+  //       //       let categoryBar = this.progressBars['categoryBars'].find(obj => obj.name === category);
+  //       //       let categoryStatusBar = categoryBar.statusBar.create(10, 0, {
+  //       //         resourceStatus: event.ResourceStatus,
+  //       //         resourceType: event.ResourceType,
+  //       //         logicalResourceId: event.LogicalResourceId,
+  //       //         timeStamp: event.Timestamp
+  //       //       })
+  //       //       const rootStackTrace = this.stackTrace[category].concat([
+  //       //         {id: event.LogicalResourceId, bar: categoryStatusBar}
+  //       //       ])
+  //       //       this.stackTrace[category] = rootStackTrace;
+  //       //     }
+  //       //   }
+  //       // }
+  //     })
+  //   }
+  // } 
+
+  // showEventProgress(events) {
+  //   events = events.reverse();
+
+  //   if (events.length > 0) {
+  //     events.forEach(event => {
+  //       if(event.LogicalResourceId === this.eventMap['rootStackName'] ||
+  //        this.eventMap['rootResources'].includes(event.LogicalResourceId)) {
+  //         if (!this.stackTrace['rootStack'].length) {
+  //           let rootProgressBar = this.progressBars['rootProgressBar'].create(1+this.eventMap['rootResources'].length, 0, {
+  //             projectName: this.context.exeInfo.projectConfig.projectName,
+  //             envName: this.context.exeInfo.localEnvInfo.envName
+  //           })
+  //           const payload = {
+  //             resourceStatus: event.ResourceStatus,
+  //             resourceType: event.ResourceType,
+  //             logicalId: event.LogicalResourceId
+  //           }
+  //           let rootStatusBar = this.progressBars['rootEventStatus'].create(5, 0, payload)
+  //           const rootStackTrace = this.stackTrace['rootStack'].concat([
+  //             {id: 'rootProgressBar', bar: rootProgressBar },
+  //             {id: event.LogicalResourceId, bar: rootStatusBar}
+  //           ])
+  //           this.stackTrace['rootStack'] = rootStackTrace;
+  //         }
+  //         else {
+  //           let savedEvent = this.stackTrace['rootStack'].find(item => item.id === event.LogicalResourceId);
+  //           if (savedEvent) {
+  //             let rootProgressBar = this.stackTrace['rootStack'].find(item => item.id === 'rootProgressBar');
+  //             const payload =  {
+  //               resourceStatus: event.ResourceStatus
+  //             }
+  //             savedEvent.bar.update(1, payload)
+  //             rootProgressBar.bar.update(1)
+  //           }
+  //           else {
+  //             const payload = {
+  //               resourceStatus: event.ResourceStatus,
+  //               resourceType: event.ResourceType,
+  //               logicalId: event.LogicalResourceId
+  //             }
+  //             let rootStatusBar = this.progressBars['rootEventStatus'].create(5, 0, payload)
+  //             const rootStackTrace = this.stackTrace['rootStack'].concat([
+  //               {id: event.LogicalResourceId, bar: rootStatusBar}
+  //             ])
+  //             this.stackTrace['rootStack'] = rootStackTrace;
+  //           }
+  //         }
+  //       }
+  //       else {
+  //         const category = this.eventMap['eventToCategories'].get(event.LogicalResourceId)
+  //         if (category) {
+  //           if (!this.stackTrace[category].length) {
+  //             let categoryDetails = this.eventMap['categories'].find(obj => obj.name === category);
+  //             let categoryBars = this.progressBars['categoryBars'].find(obj => obj.name === category);
+  //             let categoryProgressBar = categoryBars.progressBar.create(categoryDetails.size, 0, {
+  //               category: category
+  //             })
+  //             const payload = {
+  //               resourceStatus: event.ResourceStatus,
+  //               resourceType: event.ResourceType,
+  //               logicalId: event.LogicalResourceId
+  //             }
+  //             let categoryStatusBar = categoryBars.eventStatus.create(5, 0, payload)
+  //             const categoryStackTrace = this.stackTrace[category].concat([
+  //               {id: 'categoryProgressBar', bar: categoryProgressBar },
+  //               {id: event.LogicalResourceId, bar: categoryStatusBar}
+  //             ])
+  //             this.stackTrace[category] = categoryStackTrace;
+  //           }
+  //           else {
+  //             let savedEvent = this.stackTrace[category].find(item => item.id === event.LogicalResourceId);
+  //             if (savedEvent) {
+  //               let categoryProgressBar = this.stackTrace[category].find(item => item.id === 'categoryProgressBar');
+  //               const payload =  {
+  //                 resourceStatus: event.ResourceStatus
+  //               }
+  //               savedEvent.bar.update(1, payload)
+  //               categoryProgressBar.bar.update(1)
+  //             }
+  //             else {
+  //               let categoryBars = this.progressBars['categoryBars'].find(obj => obj.name === category);
+  //               let categoryStatusBar = categoryBars.eventStatus.create(5, 0, {
+  //                 resourceStatus: event.ResourceStatus,
+  //                 resourceType: event.ResourceType,
+  //                 logicalId: event.LogicalResourceId
+  //               })
+  //               const rootStackTrace = this.stackTrace['rootStack'].concat([
+  //                 {id: event.LogicalResourceId, bar: categoryStatusBar}
+  //               ])
+  //               this.stackTrace['rootStack'] = rootStackTrace;
+  //             }
+  //           }
+  //         }
+  //       }
+  //     })
+  //   }
+  // }
 
   getStackEvents(stackName) {
     const self = this;
@@ -302,6 +740,7 @@ class CloudFormation {
                   if (self.pollForEvents) {
                     clearInterval(self.pollForEvents);
                   }
+                  this.progressBar.stop();
                   if (completeErr) {
                     this.collectStackErrors(cfnParentStackParams.StackName).then(() => reject(completeErr));
                   } else {
@@ -554,6 +993,7 @@ function formatOutputs(outputs) {
 }
 
 function showEvents(events) {
+
   // CFN sorts the events by descending
   events = events.reverse();
 
